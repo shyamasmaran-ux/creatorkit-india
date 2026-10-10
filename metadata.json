@@ -1,0 +1,8 @@
+{
+  "name": "Remix CreatorKit India - Free Creator \u0026 Social Media Tools",
+  "description": "Free creator tools for Indian YouTubers, Instagram creators, students, and small businesses. Generate YouTube titles, thumbnails, Reel scripts, Instagram captions, fancy bios, WhatsApp QR codes, and more.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

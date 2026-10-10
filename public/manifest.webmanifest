@@ -1,0 +1,31 @@
+{
+  "name": "CreatorKit India - Free Creator & Social Media Tools",
+  "short_name": "CreatorKit",
+  "description": "Free creator tools for Indian YouTubers, Instagram creators, students, and small businesses. Generate YouTube titles, thumbnails, Reel scripts, Instagram captions, fancy bios, WhatsApp QR codes, and more.",
+  "theme_color": "#4f46e5",
+  "background_color": "#020617",
+  "display": "standalone",
+  "orientation": "portrait",
+  "scope": "/",
+  "start_url": "/",
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
