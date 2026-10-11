@@ -264,6 +264,7 @@ export const TextToImageGenerator: React.FC<Props> = ({ onShowToast }) => {
   const [activeConceptId, setActiveConceptId] = useState<string>('');
   const [isLoadingConcepts, setIsLoadingConcepts] = useState<boolean>(false);
   const [isAiConcepts, setIsAiConcepts] = useState<boolean>(false);
+  const [conceptError, setConceptError] = useState<string | null>(null);
 
   // 2. Manual Thumbnail Canvas Studio Controls
   const [headlineText, setHeadlineText] = useState<string>('IPHONE 16 VS S24: ASLI SACH!');
@@ -322,7 +323,7 @@ export const TextToImageGenerator: React.FC<Props> = ({ onShowToast }) => {
     setTextOffsetY(0);
   }, []);
 
-  // Generate 3 Topic-Specific Thumbnail Concepts (Server AI + Instant Local Fallback)
+  // Generate 3 Topic-Specific Thumbnail Concepts via Server AI
   const handleGenerateConcepts = async (
     overrideTopic?: string,
     overrideStyle?: ThumbnailVisualStyle,
@@ -338,10 +339,7 @@ export const TextToImageGenerator: React.FC<Props> = ({ onShowToast }) => {
       return;
     }
 
-    // Immediately show responsive local concepts while querying AI
-    const localConcepts = buildLocalTopicConcepts(targetTopic, targetStyle, targetLang);
-    setConcepts(localConcepts);
-    applyConceptToStudio(localConcepts[0]);
+    setConceptError(null);
     setIsLoadingConcepts(true);
 
     try {
@@ -354,24 +352,30 @@ export const TextToImageGenerator: React.FC<Props> = ({ onShowToast }) => {
           language: targetLang,
           forceRefresh,
         }),
-        signal: AbortSignal.timeout(12000),
+        signal: AbortSignal.timeout(25000),
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        if (Array.isArray(data.concepts) && data.concepts.length > 0) {
-          setConcepts(data.concepts);
-          setIsAiConcepts(true);
-          applyConceptToStudio(data.concepts[0]);
-          onShowToast('Generated 3 AI topic-specific thumbnail concepts!');
-          setIsLoadingConcepts(false);
-          return;
-        }
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          data.error || 'Both primary and backup AI providers are currently unavailable. Please try again.'
+        );
       }
-      setIsAiConcepts(false);
-      onShowToast('Applied topic-specific studio thumbnail concepts!');
-    } catch {
-      setIsAiConcepts(false);
+
+      if (Array.isArray(data.concepts) && data.concepts.length > 0) {
+        setConcepts(data.concepts);
+        setIsAiConcepts(true);
+        applyConceptToStudio(data.concepts[0]);
+        onShowToast('Generated 3 AI topic-specific thumbnail concepts!');
+        return;
+      }
+
+      throw new Error('No thumbnail concepts were returned by the AI provider.');
+    } catch (err: any) {
+      setConceptError(
+        err?.message || 'Unable to generate AI thumbnail concepts right now. Please try again.'
+      );
     } finally {
       setIsLoadingConcepts(false);
     }
@@ -939,6 +943,23 @@ export const TextToImageGenerator: React.FC<Props> = ({ onShowToast }) => {
             </span>
           </button>
         </div>
+
+        {conceptError && (
+          <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-sm">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{conceptError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleGenerateConcepts(undefined, undefined, undefined, true)}
+              disabled={isLoadingConcepts}
+              className="shrink-0 px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold transition-colors cursor-pointer"
+            >
+              Retry
+            </button>
+          </div>
+        )}
 
         {/* 3 Clickable Thumbnail Concept Cards */}
         {concepts.length > 0 && (

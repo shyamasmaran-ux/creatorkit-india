@@ -1,5 +1,3 @@
-import { generateYouTubeDescription } from '../data/templates';
-
 export interface GenerateDescriptionOptions {
   topic: string;
   keywords?: string;
@@ -17,7 +15,7 @@ export interface DescriptionGenerationResponse {
   fallbackNotice?: string;
 }
 
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 25000;
 const descriptionCache = new Map<string, DescriptionGenerationResponse>();
 const inflightRequests = new Map<string, Promise<DescriptionGenerationResponse>>();
 
@@ -60,7 +58,7 @@ export async function fetchGeneratedDescription(options: GenerateDescriptionOpti
     }
 
     const timeoutId = setTimeout(() => {
-      controller.abort(new DOMException('Description generation timed out after 15s', 'TimeoutError'));
+      controller.abort(new DOMException('Description generation timed out after 25s', 'TimeoutError'));
     }, REQUEST_TIMEOUT_MS);
 
     try {
@@ -74,7 +72,7 @@ export async function fetchGeneratedDescription(options: GenerateDescriptionOpti
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(data.error || 'Description generation is temporarily busy.');
+        throw new Error(data.error || 'Both primary and backup AI providers are currently unavailable. Please try again.');
       }
 
       if (data.description && typeof data.description === 'string' && data.description.trim()) {
@@ -86,22 +84,14 @@ export async function fetchGeneratedDescription(options: GenerateDescriptionOpti
         return result;
       }
 
-      throw new Error('No description was returned.');
+      throw new Error('No description was returned by the AI provider.');
     } catch (err: any) {
-      if (signal?.aborted) {
+      if (signal?.aborted || err?.name === 'AbortError') {
         throw new DOMException('Request cancelled by user', 'AbortError');
       }
-
-      // Use offline template fallback when AI is unavailable, clearly marked as isAi: false
-      const fallbackDesc = generateYouTubeDescription(payload);
-      if (fallbackDesc) {
-        return {
-          description: fallbackDesc,
-          isAi: false,
-          fallbackNotice: 'AI service is temporarily unavailable. Showing an instant offline template description instead.'
-        };
+      if (err?.name === 'TimeoutError') {
+        throw new Error('AI description generation timed out across primary and backup providers. Please try again.');
       }
-
       throw new Error(err?.message || 'Unable to generate description right now. Please try again.');
     } finally {
       clearTimeout(timeoutId);

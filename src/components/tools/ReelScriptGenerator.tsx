@@ -308,9 +308,21 @@ export const ReelScriptGenerator: React.FC<Props> = ({ onShowToast }) => {
           </div>
 
           {error && (
-            <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-sm flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{error}</span>
+            <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-sm flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+              {topic.trim().length >= 3 && (
+                <button
+                  type="button"
+                  onClick={() => handleGenerate()}
+                  disabled={isGenerating}
+                  className="shrink-0 px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  Retry
+                </button>
+              )}
             </div>
           )}
 

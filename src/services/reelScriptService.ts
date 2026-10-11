@@ -6,7 +6,7 @@ export interface ReelScriptResponse {
   fallbackNotice?: string;
 }
 
-const CLIENT_TIMEOUT_MS = 15000;
+const CLIENT_TIMEOUT_MS = 25000;
 
 export function generateOfflineReelScripts(
   topic: string,
@@ -186,44 +186,30 @@ export async function fetchReelScripts(params: {
       signal: controller.signal,
     });
 
-    if (response.ok) {
-      const data = await response.json();
-      if (Array.isArray(data.scripts) && data.scripts.length > 0) {
-        return {
-          scripts: data.scripts,
-          isAi: true,
-        };
-      }
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(
+        data.error || 'Both primary and backup AI providers are currently unavailable. Please try again.'
+      );
     }
 
-    const fallback = generateOfflineReelScripts(
-      params.topic,
-      params.style,
-      params.language,
-      params.duration
-    );
-    return {
-      scripts: fallback,
-      isAi: false,
-      fallbackNotice:
-        'Live AI service is currently busy — showing structured offline template scripts for your topic. Tap "Retry AI Generation" anytime for fresh AI scripts.',
-    };
+    if (Array.isArray(data.scripts) && data.scripts.length > 0) {
+      return {
+        scripts: data.scripts,
+        isAi: true,
+      };
+    }
+
+    throw new Error('No scripts were returned by the AI provider.');
   } catch (err: any) {
-    if (params.signal?.aborted) {
+    if (params.signal?.aborted || err?.name === 'AbortError') {
       throw new DOMException('Aborted', 'AbortError');
     }
-    const fallback = generateOfflineReelScripts(
-      params.topic,
-      params.style,
-      params.language,
-      params.duration
-    );
-    return {
-      scripts: fallback,
-      isAi: false,
-      fallbackNotice:
-        'AI request timed out or network was unreachable — showing structured offline template scripts so you can keep working.',
-    };
+    if (err?.name === 'TimeoutError') {
+      throw new Error('AI script generation timed out across primary and backup providers. Please try again.');
+    }
+    throw new Error(err?.message || 'Unable to generate scripts right now. Please try again.');
   } finally {
     clearTimeout(timeoutId);
     params.signal?.removeEventListener('abort', onExternalAbort);

@@ -1,5 +1,4 @@
 import { GeneratedTitle, TitleStyle } from '../types';
-import { generateYouTubeTitles } from '../data/templates';
 
 export interface GenerateTitleOptions {
   topic: string;
@@ -16,7 +15,7 @@ export interface TitleGenerationResponse {
   fallbackNotice?: string;
 }
 
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 25000;
 const titleCache = new Map<string, TitleGenerationResponse>();
 const inflightRequests = new Map<string, Promise<TitleGenerationResponse>>();
 
@@ -52,7 +51,7 @@ export async function fetchGeneratedTitles(options: GenerateTitleOptions): Promi
     }
 
     const timeoutId = setTimeout(() => {
-      controller.abort(new DOMException('Title generation timed out after 15s', 'TimeoutError'));
+      controller.abort(new DOMException('Title generation timed out after 25s', 'TimeoutError'));
     }, REQUEST_TIMEOUT_MS);
 
     try {
@@ -66,7 +65,7 @@ export async function fetchGeneratedTitles(options: GenerateTitleOptions): Promi
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(data.error || 'Title generation is temporarily busy.');
+        throw new Error(data.error || 'Both primary and backup AI providers are currently unavailable. Please try again.');
       }
 
       if (Array.isArray(data.titles) && data.titles.length > 0) {
@@ -78,22 +77,14 @@ export async function fetchGeneratedTitles(options: GenerateTitleOptions): Promi
         return result;
       }
 
-      throw new Error('No titles were returned.');
+      throw new Error('No titles were returned by the AI provider.');
     } catch (err: any) {
-      if (signal?.aborted) {
+      if (signal?.aborted || err?.name === 'AbortError') {
         throw new DOMException('Request cancelled by user', 'AbortError');
       }
-
-      // Use offline template fallback when AI is unavailable, clearly marked as isAi: false
-      const fallbackTitles = generateYouTubeTitles(topic, keywords, style);
-      if (fallbackTitles.length > 0) {
-        return {
-          titles: fallbackTitles,
-          isAi: false,
-          fallbackNotice: 'AI service is temporarily unavailable. Showing instant offline template titles instead.'
-        };
+      if (err?.name === 'TimeoutError') {
+        throw new Error('AI title generation timed out across primary and backup providers. Please try again.');
       }
-
       throw new Error(err?.message || 'Unable to generate titles right now. Please try again.');
     } finally {
       clearTimeout(timeoutId);

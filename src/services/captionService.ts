@@ -1,5 +1,4 @@
 import { GeneratedCaption, CaptionTone, PostType } from '../types';
-import { generateInstagramCaptions } from '../data/templates';
 
 export interface GenerateCaptionOptions {
   topic: string;
@@ -16,7 +15,7 @@ export interface CaptionGenerationResponse {
   fallbackNotice?: string;
 }
 
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 25000;
 const captionCache = new Map<string, CaptionGenerationResponse>();
 const inflightRequests = new Map<string, Promise<CaptionGenerationResponse>>();
 
@@ -52,7 +51,7 @@ export async function fetchGeneratedCaptions(options: GenerateCaptionOptions): P
     }
 
     const timeoutId = setTimeout(() => {
-      controller.abort(new DOMException('Caption generation timed out after 15s', 'TimeoutError'));
+      controller.abort(new DOMException('Caption generation timed out after 25s', 'TimeoutError'));
     }, REQUEST_TIMEOUT_MS);
 
     try {
@@ -66,7 +65,7 @@ export async function fetchGeneratedCaptions(options: GenerateCaptionOptions): P
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(data.error || 'Caption generation is temporarily busy.');
+        throw new Error(data.error || 'Both primary and backup AI providers are currently unavailable. Please try again.');
       }
 
       if (Array.isArray(data.captions) && data.captions.length > 0) {
@@ -78,22 +77,14 @@ export async function fetchGeneratedCaptions(options: GenerateCaptionOptions): P
         return result;
       }
 
-      throw new Error('No captions were returned.');
+      throw new Error('No captions were returned by the AI provider.');
     } catch (err: any) {
-      if (signal?.aborted) {
+      if (signal?.aborted || err?.name === 'AbortError') {
         throw new DOMException('Request cancelled by user', 'AbortError');
       }
-
-      // Use offline template fallback when AI is unavailable, clearly marked as isAi: false
-      const fallbackCaptions = generateInstagramCaptions(topic, postType, tone, extraContext);
-      if (fallbackCaptions.length > 0) {
-        return {
-          captions: fallbackCaptions,
-          isAi: false,
-          fallbackNotice: 'AI service is temporarily unavailable. Showing instant offline template captions instead.'
-        };
+      if (err?.name === 'TimeoutError') {
+        throw new Error('AI caption generation timed out across primary and backup providers. Please try again.');
       }
-
       throw new Error(err?.message || 'Unable to generate captions right now. Please try again.');
     } finally {
       clearTimeout(timeoutId);
