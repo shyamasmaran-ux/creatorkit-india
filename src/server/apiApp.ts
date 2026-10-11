@@ -6,16 +6,32 @@ dotenv.config();
 
 export const apiApp = express();
 
-// Normalize URL prefix when invoked inside individual Vercel /api/* serverless functions
+const KNOWN_API_PATHS = new Set([
+  '/generate-titles',
+  '/generate-captions',
+  '/generate-description',
+  '/generate-reel-scripts',
+  '/generate-thumbnail-concepts',
+  '/youtube-probe',
+  '/youtube-thumbnail',
+]);
+
+// Normalize URL prefix only when invoked for a known API route without the /api prefix
 apiApp.use((req, _res, next) => {
-  if (req.url && !req.url.startsWith('/api/') && req.url !== '/api') {
-    req.url = `/api${req.url.startsWith('/') ? '' : '/'}${req.url}`;
+  if (req.url && !req.url.startsWith('/api/')) {
+    const pathname = req.url.split('?')[0];
+    if (KNOWN_API_PATHS.has(pathname)) {
+      req.url = `/api${req.url}`;
+    }
   }
   next();
 });
 
 // Safely support both pre-parsed serverless request bodies (Vercel) and raw JSON streams (Express dev server)
 apiApp.use((req, res, next) => {
+  if (!req.url || !req.url.startsWith('/api/')) {
+    return next();
+  }
   if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
     return next();
   }
