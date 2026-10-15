@@ -46,16 +46,65 @@ apiApp.use((req, res, next) => {
   express.json({ limit: '50kb' })(req, res, next);
 });
 
-// Helper to check if an env var is a real key and not an unconfigured placeholder
+// Safely read and sanitize server API keys across standard and framework-prefixed alias conventions
+function readServerApiKey(varNames: string[], placeholderKeys: string[] = []): string {
+  for (const name of varNames) {
+    const raw = process.env[name];
+    if (typeof raw !== 'string') continue;
+    let clean = raw.trim();
+    // Strip surrounding quotes if entered with quotes in Vercel UI
+    if ((clean.startsWith('"') && clean.endsWith('"')) || (clean.startsWith("'") && clean.endsWith("'"))) {
+      clean = clean.slice(1, -1).trim();
+    }
+    if (!clean) continue;
+
+    const lower = clean.toLowerCase();
+    const isPlaceholder =
+      placeholderKeys.some((p) => lower === p.toLowerCase()) ||
+      lower.includes('placeholder') ||
+      lower.includes('your_') ||
+      lower.includes('my_');
+    if (isPlaceholder) continue;
+
+    return clean;
+  }
+  return '';
+}
+
+function getGroqKey(): string {
+  return readServerApiKey(
+    ['GROQ_API_KEY', 'VITE_GROQ_API_KEY', 'GROQ_KEY', 'GROQ_APIKEY'],
+    ['MY_GROQ_API_KEY', 'YOUR_GROQ_API_KEY']
+  );
+}
+
+function getOpenRouterKey(): string {
+  return readServerApiKey(
+    ['OPENROUTER_API_KEY', 'VITE_OPENROUTER_API_KEY', 'OPEN_ROUTER_API_KEY', 'OPENROUTER_KEY'],
+    ['MY_OPENROUTER_API_KEY', 'YOUR_OPENROUTER_API_KEY']
+  );
+}
+
+function getGeminiKey(): string {
+  return readServerApiKey(
+    ['GEMINI_API_KEY', 'VITE_GEMINI_API_KEY', 'GEMINI_KEY'],
+    ['MY_GEMINI_API_KEY', 'YOUR_GEMINI_API_KEY']
+  );
+}
+
+// Backward-compatible helper
 function getCleanEnvKey(value: string | undefined, placeholder: string): string {
-  const trimmed = (value || '').trim();
+  let trimmed = (value || '').trim();
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    trimmed = trimmed.slice(1, -1).trim();
+  }
   if (!trimmed || trimmed === placeholder) return '';
   return trimmed;
 }
 
 // Initialize GoogleGenAI SDK (server-side only, used in Google AI Studio Preview)
 function getGeminiClient(): GoogleGenAI | null {
-  const apiKey = getCleanEnvKey(process.env.GEMINI_API_KEY, 'MY_GEMINI_API_KEY');
+  const apiKey = getGeminiKey();
   if (!apiKey) return null;
   return new GoogleGenAI({
     apiKey,
@@ -160,7 +209,7 @@ async function generateWithGroq(
   systemInstruction?: string,
   expectJson = false
 ): Promise<string> {
-  const apiKey = getCleanEnvKey(process.env.GROQ_API_KEY, 'MY_GROQ_API_KEY');
+  const apiKey = getGroqKey();
   if (!apiKey) {
     throw new Error('NO_GROQ_KEY');
   }
@@ -239,7 +288,7 @@ async function generateWithOpenRouter(
   systemInstruction?: string,
   expectJson = false
 ): Promise<string> {
-  const apiKey = getCleanEnvKey(process.env.OPENROUTER_API_KEY, 'MY_OPENROUTER_API_KEY');
+  const apiKey = getOpenRouterKey();
   if (!apiKey) {
     throw new Error('NO_OPENROUTER_KEY');
   }
@@ -394,9 +443,9 @@ async function generateAiContent(
   systemInstruction?: string,
   expectJson = false
 ): Promise<string> {
-  const hasGroqKey = Boolean(getCleanEnvKey(process.env.GROQ_API_KEY, 'MY_GROQ_API_KEY'));
-  const hasOpenRouterKey = Boolean(getCleanEnvKey(process.env.OPENROUTER_API_KEY, 'MY_OPENROUTER_API_KEY'));
-  const hasGeminiKey = Boolean(getCleanEnvKey(process.env.GEMINI_API_KEY, 'MY_GEMINI_API_KEY'));
+  const hasGroqKey = Boolean(getGroqKey());
+  const hasOpenRouterKey = Boolean(getOpenRouterKey());
+  const hasGeminiKey = Boolean(getGeminiKey());
 
   if (!hasGroqKey && !hasOpenRouterKey && !hasGeminiKey) {
     throw new Error('NO_AI_PROVIDER_CONFIGURED');
@@ -436,15 +485,37 @@ async function generateAiContent(
   throw combinedError;
 }
 
+function sanitizeErrorDetail(raw: string): string {
+  const clean = String(raw || '').trim();
+  if (clean.includes('401')) {
+    return clean.includes('Groq')
+      ? 'Groq authentication failed (HTTP 401 — check GROQ_API_KEY in Vercel)'
+      : 'OpenRouter authentication failed (HTTP 401 — check OPENROUTER_API_KEY in Vercel)';
+  }
+  if (clean.includes('429')) {
+    return clean.includes('Groq')
+      ? 'Groq rate limit reached (HTTP 429)'
+      : 'OpenRouter free model rate limit reached (HTTP 429)';
+  }
+  if (clean.includes('timed out')) {
+    return clean.includes('Groq') ? 'Groq request timed out' : 'OpenRouter request timed out';
+  }
+  return clean.slice(0, 110);
+}
+
 function getProviderFailureMessage(err: any, toolLabel: string): string {
   if (err?.message === 'NO_AI_PROVIDER_CONFIGURED') {
-    return `AI ${toolLabel} is unavailable because server AI keys (GROQ_API_KEY / OPENROUTER_API_KEY) are not configured yet.`;
+    return `AI ${toolLabel} is unavailable because server AI keys (GROQ_API_KEY or OPENROUTER_API_KEY) were not found in the server runtime environment. If you recently added them to Vercel Project Settings, please trigger a Redeployment on Vercel so the serverless functions receive the updated environment variables.`;
+  }
+  if (err?.message === 'ALL_AI_PROVIDERS_FAILED' && Array.isArray(err?.details) && err.details.length > 0) {
+    const sanitized = err.details.map(sanitizeErrorDetail).join('; ');
+    return `Unable to generate ${toolLabel} right now. Upstream AI providers encountered errors: ${sanitized}. Please wait a moment and try again.`;
   }
   return `Unable to generate ${toolLabel} right now — both primary (Groq) and backup (OpenRouter Free) AI providers failed or hit rate limits. Please wait a moment and try again.`;
 }
 
 // 1. YouTube Title Generator API
-apiApp.post('/api/generate-titles', async (req, res) => {
+apiApp.post(['/api/generate-titles', '/generate-titles'], async (req, res) => {
   try {
     const { topic, keywords, style, language, forceRefresh } = req.body || {};
     if (!topic || typeof topic !== 'string' || !topic.trim()) {
@@ -534,7 +605,7 @@ Rules:
 });
 
 // 2. Instagram Caption Generator API
-apiApp.post('/api/generate-captions', async (req, res) => {
+apiApp.post(['/api/generate-captions', '/generate-captions'], async (req, res) => {
   try {
     const { topic, postType, tone, extraContext, forceRefresh } = req.body || {};
     if (!topic || typeof topic !== 'string' || !topic.trim()) {
@@ -633,7 +704,7 @@ Rules:
 });
 
 // 3. YouTube Description Generator API
-apiApp.post('/api/generate-description', async (req, res) => {
+apiApp.post(['/api/generate-description', '/generate-description'], async (req, res) => {
   try {
     const { topic, keywords, channelName, socials, includeTimestamps, includeDisclaimer, forceRefresh } = req.body || {};
     if (!topic || typeof topic !== 'string' || !topic.trim()) {
@@ -706,7 +777,7 @@ Never invent fake facts or filler paragraphs.`;
 });
 
 // 4. Reel & YouTube Shorts Hook / Script Generator API
-apiApp.post('/api/generate-reel-scripts', async (req, res) => {
+apiApp.post(['/api/generate-reel-scripts', '/generate-reel-scripts'], async (req, res) => {
   try {
     const { topic, style, language, duration, forceRefresh } = req.body || {};
     if (!topic || typeof topic !== 'string' || !topic.trim()) {
@@ -799,7 +870,7 @@ Rules:
 });
 
 // 5. Topic-Specific YouTube Thumbnail Concept Generator API
-apiApp.post('/api/generate-thumbnail-concepts', async (req, res) => {
+apiApp.post(['/api/generate-thumbnail-concepts', '/generate-thumbnail-concepts'], async (req, res) => {
   try {
     const { topic, style, language, forceRefresh } = req.body || {};
     if (!topic || typeof topic !== 'string' || !topic.trim()) {
@@ -891,7 +962,7 @@ const YT_RESOLUTIONS = [
   { key: 'mqdefault', label: 'Medium Quality (320×180)', width: 320, height: 180 },
 ] as const;
 
-apiApp.get('/api/youtube-probe', async (req, res) => {
+apiApp.get(['/api/youtube-probe', '/youtube-probe'], async (req, res) => {
   try {
     const videoId = String(req.query.videoId || '').trim();
     if (!YT_ID_REGEX.test(videoId)) {
@@ -953,7 +1024,7 @@ apiApp.get('/api/youtube-probe', async (req, res) => {
   }
 });
 
-apiApp.get('/api/youtube-thumbnail', async (req, res) => {
+apiApp.get(['/api/youtube-thumbnail', '/youtube-thumbnail'], async (req, res) => {
   try {
     const videoId = String(req.query.videoId || '').trim();
     const resKey = String(req.query.res || 'hqdefault').trim();

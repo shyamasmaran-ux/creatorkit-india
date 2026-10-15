@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx server.ts",
     "start": "tsx server.ts",
-    "build": "esbuild src/server/apiApp.ts --bundle --platform=node --format=esm --packages=external --outfile=src/server/apiApp.js && vite build",
+    "build": "npm run build:api && vite build",
+    "build:api": "esbuild src/server/apiApp.ts --bundle --platform=node --format=esm --packages=external --outfile=src/server/apiApp.js",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
