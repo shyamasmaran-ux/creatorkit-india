@@ -46,6 +46,9 @@ function readServerApiKey(varNames, placeholderKeys = []) {
     if (clean.startsWith('"') && clean.endsWith('"') || clean.startsWith("'") && clean.endsWith("'")) {
       clean = clean.slice(1, -1).trim();
     }
+    if (clean.toLowerCase().startsWith("bearer ")) {
+      clean = clean.slice(7).trim();
+    }
     if (!clean) continue;
     const lower = clean.toLowerCase();
     const isPlaceholder = placeholderKeys.some((p) => lower === p.toLowerCase()) || lower.includes("placeholder") || lower.includes("your_") || lower.includes("my_");
@@ -85,13 +88,15 @@ function getGeminiClient() {
   });
 }
 var GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
-var GROQ_MODELS = [
-  "llama-3.3-70b-versatile",
-  "llama-3.1-8b-instant"
+var DEFAULT_GROQ_MODELS = [
+  "openai/gpt-oss-20b",
+  "openai/gpt-oss-120b"
 ];
 var OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 var VERIFIED_OPENROUTER_FREE_MODELS = [
   "openrouter/free",
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "google/gemma-2-9b-it:free",
   "google/gemma-4-31b-it:free"
 ];
 function isVerifiedFreeOpenRouterModel(modelId) {
@@ -99,6 +104,7 @@ function isVerifiedFreeOpenRouterModel(modelId) {
   return clean === "openrouter/free" || clean.endsWith(":free");
 }
 var GEMINI_TEXT_MODELS = [
+  "gemini-2.5-flash",
   "gemini-3-flash-preview",
   "gemini-flash-latest"
 ];
@@ -108,7 +114,7 @@ var CACHE_TTL_MS = 10 * 60 * 1e3;
 var MAX_CACHE_ENTRIES = 100;
 var GROQ_TIMEOUT_MS = 6500;
 var OPENROUTER_TIMEOUT_MS = 7500;
-var GEMINI_TIMEOUT_MS = 6500;
+var GEMINI_TIMEOUT_MS = 15e3;
 function getCachedResponse(key) {
   const entry = responseCache.get(key);
   if (!entry) return null;
@@ -164,8 +170,18 @@ IMPORTANT: Output ONLY a valid JSON array. Do not include markdown fences or ext
     });
   }
   messages.push({ role: "user", content: prompt });
+  const configuredModel = (process.env.GROQ_MODEL || "").trim();
+  const modelsToTry = [];
+  if (configuredModel) {
+    modelsToTry.push(configuredModel);
+  }
+  for (const m of DEFAULT_GROQ_MODELS) {
+    if (!modelsToTry.includes(m)) {
+      modelsToTry.push(m);
+    }
+  }
   let lastError = null;
-  for (const model of GROQ_MODELS) {
+  for (const model of modelsToTry) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       controller.abort(new Error(`Groq model ${model} timed out after ${GROQ_TIMEOUT_MS}ms`));
@@ -278,7 +294,7 @@ IMPORTANT: Output ONLY a valid JSON array. Do not include markdown fences or ext
       return text;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
-      if (lastError.message.includes("HTTP 401")) {
+      if (lastError.message.includes("HTTP 401") || lastError.message.includes("HTTP 429")) {
         break;
       }
       continue;
@@ -368,15 +384,18 @@ async function generateAiContent(prompt, systemInstruction, expectJson = false) 
 function sanitizeErrorDetail(raw) {
   const clean = String(raw || "").trim();
   if (clean.includes("401")) {
-    return clean.includes("Groq") ? "Groq authentication failed (HTTP 401 \u2014 check GROQ_API_KEY in Vercel)" : "OpenRouter authentication failed (HTTP 401 \u2014 check OPENROUTER_API_KEY in Vercel)";
+    return clean.includes("Groq") ? "Groq authentication failed (HTTP 401: rejected GROQ_API_KEY \u2014 verify key at console.groq.com/keys)" : "OpenRouter authentication failed (HTTP 401: rejected OPENROUTER_API_KEY \u2014 verify key at openrouter.ai/keys)";
+  }
+  if (clean.includes("404")) {
+    return clean.includes("Groq") ? "Groq model unavailable (HTTP 404: requested model not supported on this account)" : "OpenRouter model unavailable (HTTP 404)";
   }
   if (clean.includes("429")) {
-    return clean.includes("Groq") ? "Groq rate limit reached (HTTP 429)" : "OpenRouter free model rate limit reached (HTTP 429)";
+    return clean.includes("Groq") ? "Groq rate limit reached (HTTP 429: API request quota reached)" : "OpenRouter rate limit reached (HTTP 429: free model tier limit reached on OpenRouter)";
   }
   if (clean.includes("timed out")) {
     return clean.includes("Groq") ? "Groq request timed out" : "OpenRouter request timed out";
   }
-  return clean.slice(0, 110);
+  return clean.slice(0, 120);
 }
 function getProviderFailureMessage(err, toolLabel) {
   if (err?.message === "NO_AI_PROVIDER_CONFIGURED") {
@@ -384,9 +403,13 @@ function getProviderFailureMessage(err, toolLabel) {
   }
   if (err?.message === "ALL_AI_PROVIDERS_FAILED" && Array.isArray(err?.details) && err.details.length > 0) {
     const sanitized = err.details.map(sanitizeErrorDetail).join("; ");
-    return `Unable to generate ${toolLabel} right now. Upstream AI providers encountered errors: ${sanitized}. Please wait a moment and try again.`;
+    const isRateLimited = err.details.some((d) => d.includes("429"));
+    if (isRateLimited) {
+      return `Unable to generate ${toolLabel} right now due to provider rate limits: ${sanitized}. Your account's free tier request limit has been reached on the AI provider.`;
+    }
+    return `Unable to generate ${toolLabel} right now. Upstream AI providers encountered errors: ${sanitized}.`;
   }
-  return `Unable to generate ${toolLabel} right now \u2014 both primary (Groq) and backup (OpenRouter Free) AI providers failed or hit rate limits. Please wait a moment and try again.`;
+  return `Unable to generate ${toolLabel} right now: primary and backup AI providers failed or were unavailable.`;
 }
 apiApp.post(["/api/generate-titles", "/generate-titles"], async (req, res) => {
   try {
